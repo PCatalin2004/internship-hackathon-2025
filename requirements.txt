@@ -1,0 +1,15 @@
+# Core backend
+fastapi
+uvicorn
+requests
+
+# Frontend
+streamlit
+
+# Optional static analysis
+pylint
+
+# Optional local model fine-tuning (only if you’ll use HuggingFace models)
+# transformers
+# torch
+# accelerate

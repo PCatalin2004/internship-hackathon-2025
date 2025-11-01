@@ -1,83 +1,105 @@
-import streamlit as st
+from fastapi import FastAPI, Form
+from fastapi.middleware.cors import CORSMiddleware
 import requests
 import json
+import tempfile
+import subprocess
+import re
 
-st.set_page_config(page_title="AI Code Review Assistant", page_icon="🤖", layout="wide")
+app = FastAPI(title="AI Code Review Backend with Auto-Fix")
 
-st.title("🤖 AI-Powered Code Review Assistant")
-st.write("Analyze your code, detect issues, and get AI-driven recommendations instantly.")
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
-# Sidebar
-st.sidebar.header("Settings")
-llm_mode = st.sidebar.radio("Mode", ["Demo", "Local LLM", "Remote API"])
-api_url = st.sidebar.text_input("Backend URL", "http://localhost:8000/review")
+# --- Ollama settings ---
+OLLAMA_URL = "http://localhost:11434/api/generate"
+MODEL_NAME = "codellama"  # make sure to pull: ollama pull codellama
 
-st.sidebar.markdown("---")
-st.sidebar.write("💡 Tip: Paste your code and click *Run Review* to get insights.")
 
-# Main content
-code = st.text_area("Paste your code here:", height=350, placeholder="def example_function():\n    pass")
+# ---------- Helper functions ----------
 
-col1, col2 = st.columns([1, 3])
-with col1:
-    run_button = st.button("🚀 Run Review")
+def call_ollama(prompt: str):
+    """Send prompt to local LLM via Ollama."""
+    payload = {"model": MODEL_NAME, "prompt": prompt, "stream": False}
+    try:
+        r = requests.post(OLLAMA_URL, json=payload, timeout=120)
+        r.raise_for_status()
+        return r.json().get("response", "").strip()
+    except Exception as e:
+        return f"[Error contacting LLM: {e}]"
 
-# When button clicked
-if run_button:
-    if not code.strip():
-        st.warning("Please paste some code first.")
-    else:
-        st.info("Reviewing code... please wait.")
 
-        # Mocked AI review output for demo mode
-        if llm_mode == "Demo":
-            demo_response = {
-                "lint_issues": [
-                    {"line": 2, "type": "style", "message": "Function name should be lowercase (PEP8)."},
-                    {"line": 3, "type": "logic", "message": "Function does not return any value."},
-                ],
-                "ai_feedback": [
-                    {
-                        "issue_type": "optimization",
-                        "description": "Consider using list comprehension for better readability.",
-                        "line_number": 5,
-                        "suggested_fix": "Replace the for loop with a list comprehension."
-                    }
-                ]
-            }
-            response = demo_response
-        elif llm_mode == "Local LLM":
-            try:
-                payload = {"prompt": f"Review this code:\n{code}"}
-                r = requests.post(api_url, json=payload)
-                response = r.json()
-            except Exception as e:
-                st.error(f"Error connecting to local backend: {e}")
-                response = {}
-        else:
-            st.error("Remote API mode not yet implemented.")
-            response = {}
+def run_lint_check(code: str):
+    """Run pylint and return main issues."""
+    try:
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".py", mode="w") as tmp:
+            tmp.write(code)
+            tmp_path = tmp.name
+        result = subprocess.run(["pylint", tmp_path, "-rn", "--score", "n"],
+                                capture_output=True, text=True)
+        issues = []
+        for line in result.stdout.splitlines():
+            if re.search(r":\d+:", line):
+                issues.append(line.strip())
+        return issues[:5]
+    except Exception:
+        return []
 
-        # Display results
-        if response:
-            st.subheader("🧾 Lint & Static Analysis")
-            if "lint_issues" in response and response["lint_issues"]:
-                for issue in response["lint_issues"]:
-                    st.markdown(f"🔹 **Line {issue['line']}** — *{issue['type']}*: {issue['message']}")
-            else:
-                st.success("No linting issues detected ✅")
 
-            st.subheader("💬 AI Suggestions")
-            if "ai_feedback" in response and response["ai_feedback"]:
-                for fb in response["ai_feedback"]:
-                    st.markdown(f"""
-                    **Issue Type:** {fb['issue_type']}  
-                    **Line:** {fb['line_number']}  
-                    **Description:** {fb['description']}  
-                    **Suggested Fix:**  
-                    ```python
-                    {fb['suggested_fix']}
-                    ```
-                    """)
-            else:
-                st.success("No AI feedback generated ✅")
+def apply_fixes_to_code(code: str, feedback: list):
+    """Try to apply suggested fixes based on LLM JSON feedback."""
+    lines = code.splitlines()
+    for fb in feedback:
+        try:
+            line_num = int(fb.get("line_number", -1))
+            fix = fb.get("suggested_fix", "")
+            if 1 <= line_num <= len(lines) and fix:
+                # Replace the line or append modification as comment
+                lines[line_num - 1] += f"  # FIX: {fix}"
+        except Exception:
+            continue
+    return "\n".join(lines)
+
+
+# ---------- Routes ----------
+
+@app.post("/review")
+async def review_code(code: str = Form(...)):
+    """Perform code review and automatic fix."""
+    # --- 1. Static Linting ---
+    lint_issues = run_lint_check(code)
+
+    # --- 2. AI Review (JSON output) ---
+    system_prompt = """You are a code review expert.
+Analyze the following Python code and produce a JSON list of findings.
+Each finding must follow this format:
+[
+  {
+    "issue_type": "bug/style/optimization/security",
+    "description": "short explanation",
+    "line_number": 12,
+    "suggested_fix": "short fix or replacement line"
+  }
+]
+Provide ONLY valid JSON as output.
+"""
+    ai_response = call_ollama(system_prompt + "\n\nCode:\n" + code)
+
+    try:
+        feedback = json.loads(ai_response)
+    except Exception:
+        feedback = [{"issue_type": "general", "description": ai_response, "line_number": "-", "suggested_fix": ""}]
+
+    # --- 3. Apply automatic fixes ---
+    fixed_code = apply_fixes_to_code(code, feedback)
+
+    return {
+        "lint_issues": lint_issues,
+        "ai_feedback": feedback,
+        "fixed_code": fixed_code
+    }
