@@ -4,7 +4,7 @@
 Build a functional product capable of performing **automated code reviews**, providing valuable insights and recommendations for developers.
 
 Your solution should analyze source code, detect potential issues, and assist in improving code quality.
-Use AI where appropriate — ideally through a **locally hosted Large Language Model (LLM)** to ensure privacy, performance, and innovation.
+Use AI where appropriate �?" ideally through a **locally hosted Large Language Model (LLM)** to ensure privacy, performance, and innovation.
 
 ---
 
@@ -61,3 +61,4 @@ Use AI where appropriate — ideally through a **locally hosted Large Language M
 ## Notes
 - Creativity, technical depth, and practical usability will be key differentiators.
 - Bonus consideration may be given for exceptional innovation, scalability, or clarity of presentation.
+

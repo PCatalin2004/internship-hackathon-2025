@@ -1,0 +1,9 @@
+repos:
+  - repo: local
+    hooks:
+      - id: ai-incremental-review
+        name: AI Incremental Review
+        entry: python scripts/precommit_review.py
+        language: system
+        files: \.py$
+        pass_filenames: false
